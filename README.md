@@ -34,11 +34,14 @@ termux-mcp/
 ├── package.json
 ├── LICENSE                 — MIT + usage disclaimer
 ├── docs/
-│   ├── README.en.md        — full English documentation
-│   ├── README.az.md        — full Azerbaijani documentation
-│   └── README.tr.md        — full Turkish documentation
+│   ├── README.en.md        — About (English) — what it is, why, features
+│   ├── README.az.md        — About (Azerbaijani)
+│   ├── README.tr.md        — About (Turkish)
+│   ├── GUIDE.en.md         — Full step-by-step setup guide (English)
+│   ├── GUIDE.az.md         — Full step-by-step setup guide (Azerbaijani)
+│   └── GUIDE.tr.md         — Full step-by-step setup guide (Turkish)
 └── prompts/
     └── ai-usage-guide.txt   — safety guide for any AI connecting to this server
 ```
 
-Want to add your language? Fork this repo, copy `docs/README.en.md` to `docs/README.<lang>.md`, translate it, and open a pull request. Add your language's badge to this file.
+Want to add your language? Fork this repo, copy `docs/README.en.md` and `docs/GUIDE.en.md` to `docs/README.<lang>.md` and `docs/GUIDE.<lang>.md`, translate both, and open a pull request. Add your language's badge to this file.

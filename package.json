@@ -1,0 +1,27 @@
+{
+  "name": "termux-mcp",
+  "version": "1.0.0-beta",
+  "description": "Sıfır asılılıqlı, Termux üzərində işləyən MCP server — AI-lərə tam Termux bash icazəsi verir.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "mcp",
+    "termux",
+    "android",
+    "ai",
+    "claude",
+    "model-context-protocol"
+  ],
+  "author": "Alim4385",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alim4385/termux-mcp.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

@@ -114,13 +114,19 @@ http.createServer((req, res) => {
     let body = '';
     req.on('data', (d) => { body += d; if (body.length > 1e6) body = body.slice(0, 1e6); });
     req.on('end', async () => {
+      const safeSend = (code, payload) => {
+        if (res.writableEnded || res.destroyed) return; // bağlantı artıq bağlıdır, yazma
+        try {
+          res.writeHead(code, code === 204 ? undefined : { 'Content-Type': 'application/json' });
+          res.end(payload);
+        } catch { /* soket bağlanıb, təhlükəsiz şəkildə görməzdən gəl */ }
+      };
       try {
         const r = await handle(JSON.parse(body));
-        if (!r) return res.writeHead(204).end();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(r));
+        if (!r) return safeSend(204);
+        safeSend(200, JSON.stringify(r));
       } catch (e) {
-        res.writeHead(400).end(JSON.stringify({ error: e.message }));
+        safeSend(400, JSON.stringify({ error: e.message }));
       }
     });
     return;

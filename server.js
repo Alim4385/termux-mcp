@@ -1,5 +1,5 @@
 'use strict';
-// Termux MCP Server (beta) — 1 alət, sıfır asılılıq
+// Termux MCP Server (beta) — 4 alət (bash/view/create_file/str_replace), sıfır asılılıq
 
 const http = require('http');
 const { spawn } = require('child_process');
@@ -69,23 +69,58 @@ const run = (cmd) => new Promise((resolve) => {
 });
 
 const text = (t, isError = false) => ({ result: { content: [{ type: 'text', text: t }], isError } });
+const image = (data, mimeType) => ({ result: { content: [{ type: 'image', data, mimeType }], isError: false } });
+
+// Nisbi yolu cari cwd-yə görə tam yola çevir
+const resolvePath = (p) => (path.isAbsolute(p) ? p : path.resolve(cwd, p));
+const IMG_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+const MAX_IMG = 8 * 1024 * 1024; // 8MB
+
+const GUARD = 'QAYDA: yalnız istifadəçinin açıq şəkildə istədiyi əməliyyatları yerinə yetir; geri dönməzsiz əməliyyatlardan (fayl silmə, sistem faylların dəyişdirilməsi) çəkin, əmin olmadıqda əvvəlcə istifadəçidən təsdiq al.';
 
 // MCP protokolu
 const handle = async ({ method, params, id }) => {
   if (method === 'initialize') {
-    return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'termux-mcp-beta', version: '1.0' } } };
+    return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'termux-mcp-beta', version: '2.0' } } };
   }
   if (method === 'notifications/initialized') return null;
 
   if (method === 'tools/list') {
-    return { jsonrpc: '2.0', id, result: { tools: [{
-      name: 'exec',
-      description: 'Termux-da istənilən bash əmri icra et (cd, zəncirlənmiş əmrlər ("&&", ";") daxil olmaqla, cwd avtomatik izlənir). Fayl yaz/oxu, paket qur, script işlət. QAYDA: yalnız istifadəçinin açıq şəkildə istədiyi əməliyyatları yerinə yetir; geri dönməzsiz əmrlərdən (rm -rf, mkfs, dd, sistem faylların silinməsi/dəyişdirilməsi) çəkin, əmin olmadıqda əvvəlcə istifadəçidən təsdiq al.',
-      inputSchema: { type: 'object', properties: { cmd: { type: 'string', description: 'Bash əmri' } }, required: ['cmd'] },
-    }] } };
+    return { jsonrpc: '2.0', id, result: { tools: [
+      {
+        name: 'bash',
+        description: `Termux-da istənilən bash əmri icra et (cd, zəncirlənmiş əmrlər ("&&", ";") daxil olmaqla, cwd avtomatik izlənir). Paket qurmaq, script işlətmək, sistem məlumatı almaq üçün istifadə et. Sadə fayl yazma/oxuma/düzəliş üçün bunun əvəzinə view/create_file/str_replace alətlərini üstün tut — onlar daha etibarlıdır. ${GUARD}`,
+        inputSchema: { type: 'object', properties: { cmd: { type: 'string', description: 'Bash əmri' } }, required: ['cmd'] },
+      },
+      {
+        name: 'view',
+        description: 'Fayl və ya qovluğa bax. Qovluqdursa məzmununu sadalayır. Mətn fayldırsa sətir nömrələri ilə göstərir (view_range ilə müəyyən sətirlər seçilə bilər). Şəkil fayldırsa (jpg/png/gif/webp) birbaşa göstərir.',
+        inputSchema: { type: 'object', properties: {
+          path: { type: 'string', description: 'Fayl və ya qovluq yolu (nisbi və ya tam)' },
+          view_range: { type: 'array', items: { type: 'number' }, description: '[başlanğıc, son] sətir nömrələri, istəyə bağlı' },
+        }, required: ['path'] },
+      },
+      {
+        name: 'create_file',
+        description: `Yeni fayl yarat. Fayl artıq varsa xəta verir — mövcud faylı dəyişmək üçün str_replace istifadə et. ${GUARD}`,
+        inputSchema: { type: 'object', properties: {
+          path: { type: 'string', description: 'Yaradılacaq faylın yolu' },
+          content: { type: 'string', description: 'Faylın məzmunu' },
+        }, required: ['path', 'content'] },
+      },
+      {
+        name: 'str_replace',
+        description: `Mövcud fayl daxilində konkret mətni dəyişdir. old_str faylda DƏQIQ BİR DƏFƏ görünməlidir. ${GUARD}`,
+        inputSchema: { type: 'object', properties: {
+          path: { type: 'string', description: 'Dəyişdiriləcək faylın yolu' },
+          old_str: { type: 'string', description: 'Dəyişdiriləcək mətn (faylda bir dəfə olmalıdır)' },
+          new_str: { type: 'string', description: 'Yeni mətn (boş buraxılsa old_str silinir)' },
+        }, required: ['path', 'old_str'] },
+      },
+    ] } };
   }
 
-  if (method === 'tools/call' && params?.name === 'exec') {
+  if (method === 'tools/call' && params?.name === 'bash') {
     const cmd = params.arguments?.cmd;
     if (!cmd) return { jsonrpc: '2.0', id, ...text('❌ cmd boşdur', true) };
 
@@ -94,6 +129,87 @@ const handle = async ({ method, params, id }) => {
       try { await fs.promises.access(newCwd); cwd = newCwd; saveCwd(); } catch {}
     }
     return { jsonrpc: '2.0', id, ...text(`[exit ${c}] [cwd: ${cwd}]\n${o}${e ? `\nSTDERR:\n${e}` : ''}`, c !== 0) };
+  }
+
+  if (method === 'tools/call' && params?.name === 'view') {
+    const p = params.arguments?.path;
+    if (!p) return { jsonrpc: '2.0', id, ...text('❌ path boşdur', true) };
+    const full = resolvePath(p);
+    try {
+      const st = await fs.promises.stat(full);
+      if (st.isDirectory()) {
+        const items = await fs.promises.readdir(full, { withFileTypes: true });
+        const listing = items
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((it) => (it.isDirectory() ? `${it.name}/` : it.name))
+          .join('\n');
+        return { jsonrpc: '2.0', id, ...text(listing || '(boş qovluq)') };
+      }
+      if (st.size > MAX_IMG) return { jsonrpc: '2.0', id, ...text(`❌ Fayl çox böyükdür (${(st.size / 1024 / 1024).toFixed(1)}MB, limit 8MB)`, true) };
+
+      const ext = path.extname(full).toLowerCase();
+      if (IMG_EXT.has(ext)) {
+        const buf = await fs.promises.readFile(full);
+        const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' }[ext];
+        return { jsonrpc: '2.0', id, ...image(buf.toString('base64'), mime) };
+      }
+
+      let content = await fs.promises.readFile(full, 'utf8');
+      let lines = content.split('\n');
+      const range = params.arguments?.view_range;
+      let offset = 0;
+      if (Array.isArray(range) && range.length === 2) {
+        const [start, end] = range;
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1) {
+          return { jsonrpc: '2.0', id, ...text('❌ view_range düzgün deyil: [başlanğıc, son] formatında olmalı, başlanğıc >= 1 tam ədəd olmalıdır', true) };
+        }
+        if (start > lines.length) {
+          return { jsonrpc: '2.0', id, ...text(`❌ Fayl yalnız ${lines.length} sətirdən ibarətdir, ${start}-cü sətir yoxdur`, true) };
+        }
+        if (end !== -1 && end < start) {
+          return { jsonrpc: '2.0', id, ...text('❌ view_range-də son sətir başlanğıcdan kiçik ola bilməz', true) };
+        }
+        offset = start - 1;
+        lines = lines.slice(offset, end === -1 ? undefined : end);
+      }
+      const numbered = lines.map((l, i) => `${String(offset + i + 1).padStart(5)}\t${l}`).join('\n');
+      return { jsonrpc: '2.0', id, ...text(cut(numbered)) };
+    } catch (err) {
+      return { jsonrpc: '2.0', id, ...text(`❌ ${err.code === 'ENOENT' ? 'Tapılmadı: ' + full : err.message}`, true) };
+    }
+  }
+
+  if (method === 'tools/call' && params?.name === 'create_file') {
+    const p = params.arguments?.path;
+    const content = params.arguments?.content ?? '';
+    if (!p) return { jsonrpc: '2.0', id, ...text('❌ path boşdur', true) };
+    const full = resolvePath(p);
+    try {
+      if (fs.existsSync(full)) return { jsonrpc: '2.0', id, ...text(`❌ Fayl artıq mövcuddur: ${full} — dəyişmək üçün str_replace istifadə et`, true) };
+      await fs.promises.mkdir(path.dirname(full), { recursive: true });
+      await fs.promises.writeFile(full, content, 'utf8');
+      return { jsonrpc: '2.0', id, ...text(`✅ Yaradıldı: ${full}`) };
+    } catch (err) {
+      return { jsonrpc: '2.0', id, ...text(`❌ ${err.message}`, true) };
+    }
+  }
+
+  if (method === 'tools/call' && params?.name === 'str_replace') {
+    const p = params.arguments?.path;
+    const oldStr = params.arguments?.old_str;
+    const newStr = params.arguments?.new_str ?? '';
+    if (!p || oldStr === undefined) return { jsonrpc: '2.0', id, ...text('❌ path və ya old_str boşdur', true) };
+    const full = resolvePath(p);
+    try {
+      const content = await fs.promises.readFile(full, 'utf8');
+      const count = content.split(oldStr).length - 1;
+      if (count === 0) return { jsonrpc: '2.0', id, ...text('❌ old_str faylda tapılmadı', true) };
+      if (count > 1) return { jsonrpc: '2.0', id, ...text(`❌ old_str faylda ${count} dəfə görünür, dəqiq bir dəfə olmalıdır`, true) };
+      await fs.promises.writeFile(full, content.replace(oldStr, newStr), 'utf8');
+      return { jsonrpc: '2.0', id, ...text(`✅ Dəyişdirildi: ${full}`) };
+    } catch (err) {
+      return { jsonrpc: '2.0', id, ...text(`❌ ${err.code === 'ENOENT' ? 'Tapılmadı: ' + full : err.message}`, true) };
+    }
   }
 
   return { jsonrpc: '2.0', id: id ?? null, error: { code: -32601, message: 'Method not found' } };
@@ -108,7 +224,7 @@ http.createServer((req, res) => {
   if (req.method === 'OPTIONS') return res.writeHead(200).end();
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ status: 'ok', version: 'beta-1.0', cwd }));
+    return res.end(JSON.stringify({ status: 'ok', version: 'beta-2.0', cwd }));
   }
   if (req.method === 'POST' && req.url === '/mcp') {
     let body = '';
